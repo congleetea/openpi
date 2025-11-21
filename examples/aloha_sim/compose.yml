@@ -15,6 +15,10 @@ services:
     volumes:
       - $PWD:/app
       - ../../data:/data
+    # environment:
+    #   - HTTP_PROXY=http://127.0.0.1:2340
+    #   - HTTPS_PROXY=http://127.0.0.1:2340
+    #   - NO_PROXY=localhost,127.0.0.1
 
   openpi_server:
     image: openpi_server
@@ -26,12 +30,14 @@ services:
     network_mode: host
     volumes:
       - $PWD:/app
-      - ${OPENPI_DATA_HOME:-~/.cache/openpi}:/openpi_assets
+      - /hard_disk/OPENPI:/openpi_assets
     environment:
       - SERVER_ARGS
       - OPENPI_DATA_HOME=/openpi_assets
       - IS_DOCKER=true
-
+      # - HTTP_PROXY=http://127.0.0.1:2340
+      # - HTTPS_PROXY=http://127.0.0.1:2340
+      # - NO_PROXY=localhost,127.0.0.1
     # Comment out this block if not running on a machine with GPUs.
     deploy:
       resources:
