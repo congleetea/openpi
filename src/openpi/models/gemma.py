@@ -71,7 +71,7 @@ def get_config(variant: Variant) -> Config:
         return Config(
             width=1024,
             depth=18,
-            mlp_dim=4096,
+            mlp_dim=4096,   
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,

@@ -309,6 +309,7 @@ class ExtractFASTActions(DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class PromptFromLeRobotTask(DataTransformFn):
     """Extracts a prompt from the current LeRobot dataset task."""
+    # 在数据中增加{"prompt": prompt}
 
     # Contains the LeRobot dataset tasks (dataset.meta.tasks).
     tasks: dict[int, str]

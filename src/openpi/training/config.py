@@ -110,6 +110,9 @@ class ModelTransformFactory(GroupFactory):
     # If provided, will determine the default prompt that be used by the model.
     default_prompt: str | None = None
 
+    # pi0 不对state进行离散化, 而pi0.5对状态进行离散化, 在PaligemmaTokenizer里面有相关的处理
+    # 如果是PI0, 则不进行状态离散化
+    # 如果是PI05, 则进行状态离散化
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
         match model_config.model_type:
             case _model.ModelType.PI0:
@@ -510,7 +513,7 @@ class TrainConfig:
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
-    # How often (in steps) to log training metrics.
+    # How often (in steps) to log training metrics. 多久记录一次训练日志
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
@@ -965,7 +968,37 @@ _CONFIGS = [
         exp_name="debug_pi05",
         wandb_enabled=False,
     ),
-    # RoboArena & PolaRiS configs.
+    TrainConfig(
+        name="pi05_lerobot",
+        model=pi0_config.Pi0Config(pi05=True,
+                                   action_horizon=15,
+                                   action_dim=6
+                                   ),
+        data=LeRobotAlohaDataConfig(
+            repo_id=tyro.MISSING,  # User needs to provide the repo_id
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="lerobot"),
+            default_prompt="cleanup the table",
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.front",
+                                "cam_right_wrist": "observation.images.wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            ),
+        ),
+    ),
+    #
+    # RoboArena configs.
+    #
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
 ]

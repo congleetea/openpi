@@ -127,10 +127,14 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
-    """Create a dataset for training."""
+    """Create a dataset for training.
+    获取元数据, 读取数据集, 设置时间戳偏移.
+    如果需要从任务中提取prompt, 则需要在数据中增加{"prompt": prompt}字段
+    """
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
@@ -299,7 +303,13 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
+    # 创建数据集合, 并设置时间戳偏移, 如果需要从任务中提取prompt, 则增加一个变换函数: PromptFromLeRobotTask, 会在数据中增加{"prompt": prompt}字段
+    # 返回一个TransformedDataset
     dataset = create_torch_dataset(data_config, action_horizon, model_config)
+
+    # 增加其他的变换函数: 我们配置里面定义的三类变换函数+归一化变换(如果需要的话)
+    # 返回一个TransformedDataset
+    # 这个类提供了__getitem__方法, 可以通过索引获取数据, 并且在获取数据的时候会自动应用变换函数
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks

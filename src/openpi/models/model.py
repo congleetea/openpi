@@ -161,22 +161,28 @@ def preprocess_observation(
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
+        # 图像的分辨率如果不是目标分辨率, 则进行resize, 使用-1把外围填充.
         if image.shape[1:3] != image_resolution:
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
 
+        # 训练的时候, 对图像进行随机裁剪, 旋转, 颜色抖动等增强, 推理的时候不进行增强
         if train:
             # Convert from [-1, 1] to [0, 1] for augmax.
             image = image / 2.0 + 0.5
 
             transforms = []
             if "wrist" not in key:
+                # 腕部相机不进行空间变换
+                # top 相机进行裁剪: 保留95%的图像内容，确保关键物体仍在视野中
+                # 旋转: 随机旋转±5度, 模拟相机轻微的抖动，增加模型的鲁棒性
                 height, width = image.shape[1:3]
                 transforms += [
                     augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
                     augmax.Resize(width, height),
                     augmax.Rotate((-5, 5)),
                 ]
+            # 对所有相机都进行颜色抖动增强(亮度,对比度,饱和度), 增加模型的鲁棒性
             transforms += [
                 augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
             ]

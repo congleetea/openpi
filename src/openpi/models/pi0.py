@@ -64,9 +64,14 @@ def posemb_sincos(
 
 
 class Pi0(_model.BaseModel):
+    # 根据config和随机数生成器初始化模型
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
+        # 1. 初始化设置动作的维度,长度,最大token长度,pi0还是pi0.5
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
+        # 2. 根据配置的llm变体获取对应的配置, 确定模型的宽度,深度,mlp维度,头数,kv头数,头维度
+        #   这里的llm包含两部分, 一个是llm, 一个是action_expert, 他们都是基于gemma模型实现的, 只是参数配置不一样.
+        #   另外还包含一个图像编码模型, 用于将图像编码为向量, 他是基于siglip模型实现的.
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -102,18 +107,24 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
+    # 编码观测输入信息, 把图像, 语言 编码成一个向量序列
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
         input_mask = []
-        ar_mask = []
+        # 注意力掩码, 用来表示模型在编码过程中, 每个token是否可以关注之前的token, True: 可以看到前后所有的token, False: 只能看到前面的token
+        # 这里的prefix是图像和语言, 所以图像和语言之间是相互关注的
+        ar_mask = []  
         tokens = []
         # embed images
         for name in obs.images:
+            # 对每一个图像, 通过siglip模型编码成一个向量序列, image_tokens.shape = (b, s, emb) 表示[batch_size, 图像token序列长度, 图像token维度]
             image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
 
             tokens.append(image_tokens)
+
+            # 输入掩码用来表示图像tokens是否有效, 比如图像的有些位置是填充的, 我们不希望模型关注这些位置
             input_mask.append(
                 einops.repeat(
                     obs.image_masks[name],
@@ -121,6 +132,7 @@ class Pi0(_model.BaseModel):
                     s=image_tokens.shape[1],
                 )
             )
+
             # image tokens attend to each other
             ar_mask += [False] * image_tokens.shape[1]
 
@@ -146,9 +158,12 @@ class Pi0(_model.BaseModel):
         at.Float[at.Array, "b emb"] | None,
     ]:
         input_mask = []
+        # - ar_mask=True：该位置使用自回归注意力（只能看到前面的token）
+        # - ar_mask=False：该位置使用双向注意力（可以看到前后所有token）
         ar_mask = []
         tokens = []
         if not self.pi05:
+            # 对于PI0, 将状态投影成为单个token, 并添加到tokens中, 只能看到前面的token.
             # add a single state token
             state_token = self.state_proj(obs.state)[:, None, :]
             tokens.append(state_token)
@@ -190,27 +205,37 @@ class Pi0(_model.BaseModel):
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
+        # 1. 对observation进行预处理, 包括图像和语言的编码, 以及状态的投影, 特别注意对于状态的投影:
+        #    如果是PI0.5, 会先对状态进行离散化, 然后放在prompt后面, 一起作为语句的一部分.
+        #    如果是PI0, 则不进行状态离散化, 会在embed_suffix的时候直接投影到embedding维度, 作为后缀的一部分.
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
+        # 2. 根据actions, 采样time和noise, 计算x_t和u_t
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
-        time_expanded = time[..., None, None]
-        x_t = time_expanded * noise + (1 - time_expanded) * actions
-        u_t = noise - actions
+        time_expanded = time[..., None, None]      # 这个计算是这样的: 假如time=[0.253, 0.867, 0.421, 0.035]  # 形状为 (4,)
+                                                   # 则time_expanded=[[[0.253]], [[0.867]], [[0.421]], [[0.035]]]  # 形状为 (4, 1, 1)
+                                                   # 所以这个函数意思是, 维持数据不变, 但是增加两个维度.这种扩展是为了后续的广播计算，让不同形状的数组可以进行逐元素操作
+        x_t = time_expanded * noise + (1 - time_expanded) * actions  # 这个加噪声噪声的动作, 论文里面的A_t^tau
+        u_t = noise - actions   # 真实的去噪方向
 
         # one big forward pass of prefix + suffix at once
+        # 3. 对prefix和suffix进行大的前向传播, 得到prefix_out和suffix_out
+        #    3.1 前缀包含image和语言(如果是pi0.5, 这里的语言就包含了离散的状态)
+        #    3.2 后缀包含状态(在pi0里面, 作为连续的输入, 直接当作一个token嵌入)和动作
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
+        # 4. 前向传播, 得到prefix_out和suffix_out, 从suffix_out里面获取到模型预测的动作变化的方向 v_t
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
             [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
-
+        # 5. 计算损失, 这里使用的是MSE损失
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
 
     @override
