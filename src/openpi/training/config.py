@@ -501,7 +501,7 @@ class TrainConfig:
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
-    # How often (in steps) to log training metrics.
+    # How often (in steps) to log training metrics. 多久记录一次训练日志
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
@@ -955,6 +955,34 @@ _CONFIGS = [
         overwrite=True,
         exp_name="debug_pi05",
         wandb_enabled=False,
+    ),
+    TrainConfig(
+        name="pi05_lerobot",
+        model=pi0_config.Pi0Config(pi05=True,
+                                   action_horizon=15,
+                                   action_dim=6
+                                   ),
+        data=LeRobotAlohaDataConfig(
+            repo_id=tyro.MISSING,  # User needs to provide the repo_id
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="lerobot"),
+            default_prompt="cleanup the table",
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.front",
+                                "cam_right_wrist": "observation.images.wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            ),
+        ),
     ),
     #
     # RoboArena configs.
